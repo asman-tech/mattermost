@@ -102,20 +102,8 @@ func (ps *PlatformService) LoadLicense() {
 
 	record, nErr := ps.Store.License().Get(sqlstore.RequestContextWithMaster(c), licenseId)
 	if nErr != nil {
-		if ps.Config().FeatureFlags.EnableMattermostEntry && model.BuildEnterpriseReady == "true" {
-			ps.logger.Info("Mattermost Entry is enabled. Unlocking enterprise features.")
-
-			if ps.LicenseManager() == nil {
-				ps.logger.Warn("License manager not available, setting license to nil.")
-				ps.SetLicense(nil)
-				return
-			}
-
-			ps.SetLicense(ps.LicenseManager().NewMattermostEntryLicense(ps.telemetryId))
-		} else {
-			ps.logger.Warn("License key from https://mattermost.com required to unlock enterprise features.", mlog.Err(nErr))
-			ps.SetLicense(nil)
-		}
+		ps.logger.Info("No license found. Creating synthetic full license to unlock all features.")
+		ps.SetLicense(model.NewSyntheticFullLicense(ps.telemetryId))
 		return
 	}
 
@@ -321,6 +309,7 @@ func (ps *PlatformService) RemoveLicense() *model.AppError {
 	}
 
 	ps.SetLicense(nil)
+	ps.SetLicense(model.NewSyntheticFullLicense(ps.telemetryId))
 	if err := ps.ReloadConfig(); err != nil {
 		ps.logger.Warn("Failed to reload config after removing license", mlog.Err(err))
 	}

@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 )
 
@@ -421,6 +423,49 @@ func (l *License) HasSharedChannels() bool {
 
 	return (l.Features != nil && l.Features.SharedChannels != nil && *l.Features.SharedChannels) ||
 		MinimumProfessionalLicense(l)
+}
+
+// NewSyntheticFullLicense returns a fully-featured Enterprise Advanced license
+// that never expires. Used to unlock all license-gated features when no real
+// license is present.
+//
+// User limits are configurable via environment variables:
+//   - MM_SYNTHETIC_USER_LIMIT: max users (default 10)
+//   - MM_SYNTHETIC_USER_LIMIT_EXTRA: grace users above the limit (default 5)
+func NewSyntheticFullLicense(serverId string) *License {
+	userLimit := 10
+	if v := os.Getenv("MM_SYNTHETIC_USER_LIMIT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			userLimit = n
+		}
+	}
+
+	extraUsers := 5
+	if v := os.Getenv("MM_SYNTHETIC_USER_LIMIT_EXTRA"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
+			extraUsers = n
+		}
+	}
+
+	license := &License{
+		Id:                  serverId,
+		IssuedAt:            GetMillis(),
+		StartsAt:            GetMillis(),
+		ExpiresAt:           GetMillis() + 100*365*DayInMilliseconds,
+		IsSeatCountEnforced: userLimit > 0,
+		ExtraUsers:          NewPointer(extraUsers),
+		Customer: &Customer{
+			Id:   serverId,
+			Name: "Synthetic",
+		},
+		Features:     &Features{},
+		SkuName:      "Enterprise Advanced",
+		SkuShortName: LicenseShortSkuEnterpriseAdvanced,
+	}
+	license.Features.SetDefaults()
+	license.Features.Users = NewPointer(userLimit)
+	license.Features.Cloud = NewPointer(false)
+	return license
 }
 
 // NewTestLicense returns a license that expires in the future and has the given features.
