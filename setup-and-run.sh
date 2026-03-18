@@ -1,7 +1,8 @@
 #!/bin/bash
 set -e
 
-cd "$(dirname "$0")"
+REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$REPO_DIR"
 
 # ---- Config (override via env vars) ----
 DB_USER="${MM_DB_USER:-mmuser}"
@@ -14,6 +15,14 @@ USER_LIMIT="${MM_SYNTHETIC_USER_LIMIT:-10}"
 USER_LIMIT_EXTRA="${MM_SYNTHETIC_USER_LIMIT_EXTRA:-5}"
 GO_VERSION="1.24.13"
 NODE_VERSION="24"
+RUN_IN_BACKGROUND=false
+
+# Parse flags
+for arg in "$@"; do
+    case $arg in
+        --background) RUN_IN_BACKGROUND=true ;;
+    esac
+done
 
 echo "============================================"
 echo "  Mattermost Full Setup & Run"
@@ -100,19 +109,62 @@ echo ""
 echo "============================================"
 echo "  Starting Mattermost"
 echo "============================================"
-export MM_SQLSETTINGS_DRIVERNAME=postgres
-export MM_SQLSETTINGS_DATASOURCE="postgres://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable"
-export MM_SERVICESETTINGS_SITEURL="$SITE_URL"
-export MM_SERVICESETTINGS_LISTENADDRESS=":8065"
-export MM_SYNTHETIC_USER_LIMIT="$USER_LIMIT"
-export MM_SYNTHETIC_USER_LIMIT_EXTRA="$USER_LIMIT_EXTRA"
-
 echo ""
 echo "  Site URL:    $SITE_URL"
 echo "  DB:          ${DB_USER}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
 echo "  User limit:  $USER_LIMIT (+$USER_LIMIT_EXTRA grace)"
 echo ""
-echo "  Open $SITE_URL in your browser to complete setup."
-echo ""
 
-exec ./bin/mattermost
+if [ "$RUN_IN_BACKGROUND" = true ]; then
+    echo "==> Installing systemd service..."
+
+    sudo tee /etc/systemd/system/mattermost.service > /dev/null <<EOF
+[Unit]
+Description=Mattermost
+After=network.target postgresql.service
+
+[Service]
+Type=exec
+WorkingDirectory=${REPO_DIR}/server
+ExecStart=${REPO_DIR}/server/bin/mattermost
+Restart=always
+RestartSec=10
+User=$(whoami)
+Environment=MM_SQLSETTINGS_DRIVERNAME=postgres
+Environment=MM_SQLSETTINGS_DATASOURCE=postgres://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable
+Environment=MM_SERVICESETTINGS_SITEURL=${SITE_URL}
+Environment=MM_SERVICESETTINGS_LISTENADDRESS=:8065
+Environment=MM_SYNTHETIC_USER_LIMIT=${USER_LIMIT}
+Environment=MM_SYNTHETIC_USER_LIMIT_EXTRA=${USER_LIMIT_EXTRA}
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable mattermost
+    sudo systemctl restart mattermost
+
+    echo "  Mattermost is running as a systemd service."
+    echo ""
+    echo "  Commands:"
+    echo "    sudo systemctl status mattermost    # check status"
+    echo "    sudo journalctl -u mattermost -f    # view logs"
+    echo "    sudo systemctl restart mattermost   # restart"
+    echo "    sudo systemctl stop mattermost      # stop"
+    echo ""
+    echo "  Open $SITE_URL in your browser to complete setup."
+else
+    export MM_SQLSETTINGS_DRIVERNAME=postgres
+    export MM_SQLSETTINGS_DATASOURCE="postgres://${DB_USER}:${DB_PASS}@${DB_HOST}:${DB_PORT}/${DB_NAME}?sslmode=disable"
+    export MM_SERVICESETTINGS_SITEURL="$SITE_URL"
+    export MM_SERVICESETTINGS_LISTENADDRESS=":8065"
+    export MM_SYNTHETIC_USER_LIMIT="$USER_LIMIT"
+    export MM_SYNTHETIC_USER_LIMIT_EXTRA="$USER_LIMIT_EXTRA"
+
+    echo "  Running in foreground (use --background for systemd service)."
+    echo "  Open $SITE_URL in your browser to complete setup."
+    echo ""
+
+    exec ./bin/mattermost
+fi
